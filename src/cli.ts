@@ -1,132 +1,134 @@
 #!/usr/bin/env node
 
-import * as path from 'node:path';
-import * as fs from 'node:fs';
-import { collectFiles, analyzeFiles } from './analyzer';
-import { reportTerminal, reportJSON, printSummary } from './reporter';
+import { resolve } from "node:path";
+import { scanDirectory } from "./core/scanner.js";
+import { analyzeDirectory } from "./core/analyzer.js";
+import { formatTable, formatJSON } from "./core/reporter.js";
 
-const VERSION = '1.2.0';
-const HELP = `
-ai-ready — pre-session agent briefing for JS/TS codebases
-
-usage:
-  npx @safetnsr/ai-ready [path] [options]
-
-  path: file or directory to analyze (default: current directory)
-
-options:
-  --json          machine-readable output
-  --summary       show only action items and summary (no per-file details)
-  --top <n>       show only top N riskiest files (default: all)
-  --context       alias for default behavior (explicit flag)
-  --version, -v   show version
-  --help, -h      show help
-
-examples:
-  npx @safetnsr/ai-ready                    scan current directory
-  npx @safetnsr/ai-ready src/auth/          brief me on auth module
-  npx @safetnsr/ai-ready src/auth/index.ts  brief me on one file
-  npx @safetnsr/ai-ready --json             machine-readable for agent consumption
-  npx @safetnsr/ai-ready --summary          quick pre-session check
-  npx @safetnsr/ai-ready --top 5            show 5 riskiest files
-`;
-
-async function main() {
-  const args = process.argv.slice(2);
-
-  // flags
-  if (args.includes('--version') || args.includes('-v')) {
-    console.log(VERSION);
-    process.exit(0);
-  }
-  if (args.includes('--help') || args.includes('-h')) {
-    console.log(HELP);
-    process.exit(0);
-  }
-
-  const jsonMode = args.includes('--json');
-  const summaryMode = args.includes('--summary');
-  let top: number | null = null;
-  const topIdx = args.indexOf('--top');
-  if (topIdx !== -1 && args[topIdx + 1]) {
-    top = parseInt(args[topIdx + 1], 10);
-  }
-
-  // target path: first arg that doesn't start with --
-  let targetPath = process.cwd();
-  for (const arg of args) {
-    if (!arg.startsWith('--') && !arg.startsWith('-')) {
-      // skip if it's the number after --top
-      if (topIdx !== -1 && args[topIdx + 1] === arg) continue;
-      targetPath = path.resolve(arg);
-      break;
-    }
-  }
-
-  if (!fs.existsSync(targetPath)) {
-    console.error(`error: path not found: ${targetPath}`);
-    process.exit(1);
-  }
-
-  const projectRoot = fs.statSync(targetPath).isFile()
-    ? path.dirname(targetPath)
-    : targetPath;
-
-  // for circular dep detection, find the actual project root (has package.json)
-  let madgeRoot = projectRoot;
-  let current = projectRoot;
-  while (current !== path.dirname(current)) {
-    if (fs.existsSync(path.join(current, 'package.json'))) {
-      madgeRoot = current;
-      break;
-    }
-    current = path.dirname(current);
-  }
-
-  const files = await collectFiles(targetPath);
-
-  if (files.length === 0) {
-    if (jsonMode) {
-      console.log(JSON.stringify({ files: [], action_items: [], summary: 'no JS/TS files found.' }, null, 2));
-    } else {
-      console.log('no JS/TS files found in', targetPath);
-    }
-    process.exit(0);
-  }
-
-  // limit to top 10 for full project scans if no --top specified
-  const isFullProjectScan = fs.statSync(targetPath).isDirectory() && targetPath === process.cwd();
-  const effectiveTop = top ?? (isFullProjectScan && files.length > 10 ? 10 : null);
-
-  const result = await analyzeFiles(files, madgeRoot);
-
-  if (effectiveTop !== null) {
-    result.files = result.files.slice(0, effectiveTop);
-  }
-
-  if (summaryMode) {
-    if (jsonMode) {
-      console.log(JSON.stringify({
-        action_items: result.action_items,
-        summary: result.summary,
-      }, null, 2));
-    } else {
-      printSummary(result);
-    }
-    process.exit(result.files.some(f => f.risk_level === 'high') ? 1 : 0);
-  }
-
-  if (jsonMode) {
-    console.log(reportJSON(result));
-  } else {
-    console.log(reportTerminal(result));
-  }
-
-  const hasHighRisk = result.files.some(f => f.risk_level === 'high');
-  process.exit(hasHighRisk ? 1 : 0);
+interface CliOptions {
+  dir: string;
+  json: boolean;
+  top?: number;
+  minScore?: number;
+  ci: boolean;
+  explain: boolean;
+  ext?: string[];
+  help: boolean;
 }
 
-main().catch(err => {
-  console.error('error:', err.message || err);
-  process.exit(1);
-});
+function parseArgs(args: string[]): CliOptions {
+  const opts: CliOptions = {
+    dir: ".",
+    json: false,
+    ci: false,
+    explain: false,
+    help: false,
+  };
+
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === "--json") {
+      opts.json = true;
+    } else if (arg === "--ci") {
+      opts.ci = true;
+    } else if (arg === "--explain") {
+      opts.explain = true;
+    } else if (arg === "--help" || arg === "-h") {
+      opts.help = true;
+    } else if (arg === "--top" && i + 1 < args.length) {
+      opts.top = parseInt(args[++i], 10);
+    } else if (arg === "--min-score" && i + 1 < args.length) {
+      opts.minScore = parseInt(args[++i], 10);
+    } else if (arg === "--ext" && i + 1 < args.length) {
+      opts.ext = args[++i].split(",");
+    } else if (!arg.startsWith("-")) {
+      opts.dir = arg;
+    }
+    i++;
+  }
+
+  return opts;
+}
+
+const HELP = `
+ai-ready — pre-session codebase AI-readiness scorer
+
+Usage: ai-ready [dir] [options]
+
+Options:
+  --json          Output machine-readable JSON
+  --top N         Show only worst N files
+  --min-score N   Only show files below score N
+  --ci            Exit 1 if overall < 60, exit 0 if ≥ 60
+  --explain       Show per-signal breakdown per file
+  --ext LIST      Comma-separated extensions (default: .ts,.js,.tsx,.jsx)
+  -h, --help      Show this help
+
+Examples:
+  ai-ready                    # scan current directory
+  ai-ready ./src              # scan specific directory
+  ai-ready --json             # JSON output for CI/agents
+  ai-ready --ci               # gate CI on readiness score
+  ai-ready --top 5 --explain  # worst 5 files with signal breakdown
+`;
+
+export function main(args?: string[]): { exitCode: number; output: string } {
+  const cliArgs = args ?? process.argv.slice(2);
+  const opts = parseArgs(cliArgs);
+
+  if (opts.help) {
+    return { exitCode: 0, output: HELP };
+  }
+
+  const dir = resolve(opts.dir);
+  const files = scanDirectory(dir, opts.ext ? { extensions: opts.ext } : undefined);
+
+  if (files.length === 0) {
+    const msg = opts.json
+      ? JSON.stringify({ files: [], overall: 100, recommendations: [] }, null, 2)
+      : "ai-ready — no source files found";
+    return { exitCode: opts.ci ? 0 : 0, output: msg };
+  }
+
+  let result = analyzeDirectory(files, dir);
+
+  // Apply filters to the result
+  if (opts.minScore !== undefined) {
+    result = {
+      ...result,
+      files: result.files.filter((f) => f.score < opts.minScore!),
+    };
+  }
+  if (opts.top !== undefined) {
+    result = {
+      ...result,
+      files: result.files.slice(0, opts.top),
+    };
+  }
+
+  let output: string;
+  if (opts.json) {
+    output = formatJSON(result);
+  } else {
+    output = formatTable(result, {
+      explain: opts.explain,
+    });
+  }
+
+  const exitCode = opts.ci ? (result.overall < 60 ? 1 : 0) : 0;
+
+  return { exitCode, output };
+}
+
+// Run if executed directly
+const isDirectRun = process.argv[1] &&
+  (process.argv[1].endsWith("/ai-ready") ||
+   process.argv[1].endsWith("/cli.js") ||
+   process.argv[1].endsWith("/dist/cli.js"));
+
+if (isDirectRun) {
+  const { exitCode, output } = main();
+  console.log(output);
+  process.exit(exitCode);
+}

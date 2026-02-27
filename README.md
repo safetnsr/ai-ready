@@ -1,135 +1,108 @@
 # ai-ready
 
-pre-session agent briefing for JS/TS codebases. know the risks before you start.
+Pre-session codebase AI-readiness scorer — **know before you claude**.
 
-**not a readiness score.** a context tool — analyzes circular deps, global state, missing types, and test coverage per file so you (or your agent) know what to watch out for before editing.
+Analyzes your codebase and tells you which files will hit the AI complexity wall before you start a Claude Code session.
 
-## install
+## Install
 
 ```bash
 npx @safetnsr/ai-ready
 ```
 
-zero install. runs on node >=18.
-
-## usage
+## Usage
 
 ```bash
-npx @safetnsr/ai-ready                    # scan current directory (top 10 riskiest)
-npx @safetnsr/ai-ready src/auth/          # brief me on auth module
-npx @safetnsr/ai-ready src/auth/index.ts  # brief me on one file
-npx @safetnsr/ai-ready --json             # machine-readable for agent consumption
-npx @safetnsr/ai-ready --top 5            # show 5 riskiest files
+ai-ready [dir] [options]
 ```
 
-## example output
+### Sample Output
 
 ```
-ai-ready — pre-session briefing
-────────────────────────────────────────
+ai-ready — codebase scan complete
 
-src/auth/index.ts  [HIGH RISK]
-  ⚠ circular dep   → src/api/middleware.ts
-  ⚠ global state   → config (line 12), sessionStore (line 45)
-  ⚠ missing types  → 8 exported functions without return type
-  ✓ tests          → 12 assertions
-  → read src/api/middleware.ts before touching this file.
-  → avoid config, sessionStore — shared state.
+FILE                    SCORE  TOP ISSUE              FIX
+src/auth/index.ts        12    function too long      split into smaller functions
+src/api/middleware.ts    34    high coupling           extract shared utils
+src/utils/helpers.ts     87    ✓ AI-ready
 
-src/api/routes.ts  [MEDIUM RISK]
-  ✓ no circular deps
-  ⚠ global state   → rateLimiter (line 8)
-  ✓ types ok
-  ✓ tests          → 8 assertions
-
-────────────────────────────────────────
-1 high risk. 1 medium. 2 files need attention before starting your session.
+overall: 54/100 ⚠️  some modules need work before AI sessions
+→ split src/auth/index.ts into smaller files first (biggest win)
+→ high coupling in src/api/middleware.ts
 ```
 
-## flags
+## Flags
 
-| flag | description |
+| Flag | Description |
 |------|-------------|
-| `--json` | machine-readable JSON output |
-| `--top <n>` | show only top N riskiest files |
-| `--context` | alias for default behavior (explicit) |
-| `--version`, `-v` | show version |
-| `--help`, `-h` | show help |
+| `[dir]` | Directory to scan (default: `.`) |
+| `--json` | Machine-readable JSON output |
+| `--top N` | Show only worst N files |
+| `--min-score N` | Only show files below score N |
+| `--ci` | Exit 1 if overall < 60, exit 0 if ≥ 60 |
+| `--explain` | Show per-signal breakdown per file |
+| `--ext LIST` | Comma-separated extensions (default: `.ts,.js,.tsx,.jsx`) |
+| `-h, --help` | Show help |
 
-## what it checks
+## Scoring
 
-- **circular dependencies** — detected via [madge](https://github.com/pahen/madge). files in a cycle are high risk.
-- **global mutable state** — module-level `let`/`var` declarations that can be mutated from anywhere.
-- **missing return types** — exported functions without explicit return type annotations.
-- **test coverage** — whether a matching test file exists and how many assertions it contains.
+Each file is scored 0-100 based on five signals:
 
-## risk levels
+| Signal | Weight | What it measures |
+|--------|--------|-----------------|
+| Function length | 30% | Average function length (< 20 lines = 100) |
+| Coupling | 25% | Import count (≤ 3 = 100) |
+| Test coverage | 25% | Matching test file exists |
+| Comment density | 10% | Comment-to-code ratio |
+| File size | 10% | Total line count (≤ 150 = 100) |
 
-- **high** — circular deps, >2 global mutations, or >5 missing return types
-- **medium** — any global mutation, >2 missing return types, or no test file
-- **low** — clean, safe to edit
-
-## exit codes
-
-- `0` — no high-risk files found
-- `1` — one or more high-risk files found
-
-## agent integration
-
-run before starting a coding session to brief your agent:
+## Agent Interface (`--json`)
 
 ```bash
-npx @safetnsr/ai-ready src/ --json
+ai-ready --json | jq '.files[] | select(.score < 40)'
 ```
 
-json schema:
+JSON schema:
 
 ```json
 {
   "files": [
     {
-      "file": "src/auth/index.ts",
-      "risk_level": "high",
-      "circular_deps": ["src/api/middleware.ts"],
-      "global_mutations": [
-        { "name": "config", "line": 12 }
-      ],
-      "missing_return_types": 8,
-      "test_coverage": { "has_test_file": true, "assertion_count": 12 },
-      "briefing": "read src/api/middleware.ts first. avoid config — shared state."
+      "path": "src/auth/index.ts",
+      "score": 12,
+      "issues": ["function too long", "split into smaller functions"],
+      "signals": {
+        "functionLength": 0,
+        "coupling": 0,
+        "testCoverage": 0,
+        "commentDensity": 10,
+        "fileSize": 40
+      }
     }
   ],
-  "summary": "2 high risk files. 1 medium. review before starting session."
+  "overall": 54,
+  "recommendations": ["split src/auth/index.ts into smaller files first (biggest win)"]
 }
 ```
 
-feed this into your agent's system prompt or pre-session context for safer edits.
+## CI Integration
 
-## suite
-
-pair with [vibe-check](https://github.com/safetnsr/vibe-check):
-
-- **ai-ready** before your session — know the risks
-- **vibe-check** after your session — validate the vibes
-
-```bash
-npx @safetnsr/ai-ready src/     # before: what to watch out for
-# ... do your work ...
-npx @safetnsr/vibe-check src/   # after: did anything break?
+```yaml
+# .github/workflows/ai-ready.yml
+- name: Check AI readiness
+  run: npx @safetnsr/ai-ready --ci
 ```
 
-## the agent workflow toolkit
+Exit codes:
+- `0` — overall score ≥ 60 (ready for AI sessions)
+- `1` — overall score < 60 (refactor first)
 
-ai-ready pairs with [vibe-check](https://github.com/safetnsr/vibe-check) to bookend every agent coding session:
+## Pair With
 
-```bash
-npx @safetnsr/ai-ready src/auth/   # before: know the risks
-# ... run your agent session ...
-npx @safetnsr/vibe-check           # after: catch what it broke
-```
+- [vibe-check](https://github.com/safetnsr/vibe-check) — post-session risk scanner
+- [session-distill](https://github.com/safetnsr/session-distill) — generate CLAUDE.md from session history
+- [human-edge](https://github.com/safetnsr/human-edge) — your AI-replaceability score
 
-both tools are zero-install, agent-native, and designed to be called from your workflow — not just run manually.
-
-## license
+## License
 
 MIT
