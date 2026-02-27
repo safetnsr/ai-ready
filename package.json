@@ -1,0 +1,49 @@
+{
+  "name": "@safetnsr/ai-ready",
+  "version": "0.1.0",
+  "description": "pre-session agent briefing for JS/TS codebases — know the risks before you start",
+  "bin": {
+    "ai-ready": "./dist/cli.js"
+  },
+  "main": "./dist/cli.js",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test": "npm run build:test && node --test build/tests/*.test.js",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "codebase",
+    "analysis",
+    "pre-session",
+    "cli",
+    "typescript"
+  ],
+  "author": "safetnsr",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/safetnsr/ai-ready.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@typescript-eslint/parser": "^8.56.1",
+    "@typescript-eslint/types": "^8.56.1",
+    "chalk": "^4.1.2",
+    "madge": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/madge": "^5.0.3",
+    "@types/node": "^25.3.2",
+    "typescript": "^5.9.3"
+  }
+}
