@@ -27,6 +27,11 @@ function reportFile(file: FileAnalysis): string {
 
   lines.push(`${file.file}  ${riskBadge(file.risk_level)}`);
 
+  // incoming deps
+  if (file.incoming_deps > 0) {
+    lines.push(warn(`📥 ${file.incoming_deps} dependent${file.incoming_deps === 1 ? '' : 's'}   → ${file.incoming_deps} file${file.incoming_deps === 1 ? '' : 's'} import this`));
+  }
+
   // circular deps
   if (file.circular_deps.length > 0) {
     lines.push(warn(`circular dep   → ${file.circular_deps.join(', ')}`));

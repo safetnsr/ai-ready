@@ -16,6 +16,7 @@ export interface TestCoverage {
 export interface FileAnalysis {
   file: string;
   risk_level: 'low' | 'medium' | 'high';
+  incoming_deps: number;
   circular_deps: string[];
   global_mutations: GlobalMutation[];
   missing_return_types: number;
@@ -204,6 +205,7 @@ export function detectTestCoverage(filePath: string): TestCoverage {
 
 interface MadgeResult {
   circular(): string[][];
+  obj(): Record<string, string[]>;
 }
 
 let madgeCache: Map<string, MadgeResult> = new Map();
@@ -242,6 +244,36 @@ export async function detectCircularDeps(filePath: string, projectRoot: string):
   }
 }
 
+export async function detectIncomingDeps(filePath: string, projectRoot: string): Promise<number> {
+  try {
+    let result = madgeCache.get(projectRoot);
+    if (!result) {
+      result = await madge(projectRoot, {
+        fileExtensions: ['ts', 'js', 'tsx', 'jsx'],
+        excludeRegExp: [/node_modules/, /\.d\.ts$/],
+      }) as unknown as MadgeResult;
+      madgeCache.set(projectRoot, result);
+    }
+
+    const obj = (result as any).obj() as Record<string, string[]>;
+    const relFile = path.relative(projectRoot, filePath).replace(/\\/g, '/');
+    const relNoExt = relFile.replace(/\.(ts|tsx|js|jsx)$/, '');
+
+    let count = 0;
+    for (const deps of Object.values(obj)) {
+      for (const dep of deps) {
+        const depNoExt = dep.replace(/\.(ts|tsx|js|jsx)$/, '');
+        if (dep === relFile || dep === relNoExt || depNoExt === relNoExt) {
+          count++;
+        }
+      }
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
 export function clearMadgeCache(): void {
   madgeCache = new Map();
 }
@@ -249,12 +281,14 @@ export function clearMadgeCache(): void {
 export function calculateRisk(analysis: Omit<FileAnalysis, 'risk_level' | 'briefing'>): 'low' | 'medium' | 'high' {
   if (
     analysis.circular_deps.length > 0 ||
+    (analysis.incoming_deps > 5 && !analysis.test_coverage.has_test_file) ||
     analysis.global_mutations.length > 2 ||
     analysis.missing_return_types > 5
   ) {
     return 'high';
   }
   if (
+    (analysis.incoming_deps > 2 && !analysis.test_coverage.has_test_file) ||
     analysis.global_mutations.length > 0 ||
     analysis.missing_return_types > 2 ||
     !analysis.test_coverage.has_test_file
@@ -267,6 +301,9 @@ export function calculateRisk(analysis: Omit<FileAnalysis, 'risk_level' | 'brief
 export function generateBriefing(analysis: Omit<FileAnalysis, 'briefing'>): string {
   const parts: string[] = [];
 
+  if (analysis.incoming_deps > 0) {
+    parts.push(`${analysis.incoming_deps} file${analysis.incoming_deps === 1 ? '' : 's'} depend${analysis.incoming_deps === 1 ? 's' : ''} on this.`);
+  }
   if (analysis.circular_deps.length > 0) {
     parts.push(`read ${analysis.circular_deps[0]} before touching this file.`);
   }
@@ -276,6 +313,9 @@ export function generateBriefing(analysis: Omit<FileAnalysis, 'briefing'>): stri
   }
   if (analysis.missing_return_types > 0) {
     parts.push(`${analysis.missing_return_types} functions lack return types — type errors may be unpredictable.`);
+  }
+  if (analysis.incoming_deps > 5 && analysis.test_coverage.assertion_count < 5) {
+    parts.push(`low test coverage for a high-impact file — write tests before editing.`);
   }
   if (parts.length === 0) {
     return 'safe to edit.';
@@ -288,12 +328,14 @@ export async function analyzeFiles(files: string[], projectRoot: string): Promis
 
   for (const file of files) {
     const circular_deps = await detectCircularDeps(file, projectRoot);
+    const incoming_deps = await detectIncomingDeps(file, projectRoot);
     const global_mutations = detectGlobalMutations(file);
     const missing_return_types = detectMissingReturnTypes(file);
     const test_coverage = detectTestCoverage(file);
 
     const partial = {
       file: path.relative(projectRoot, file).replace(/\\/g, '/'),
+      incoming_deps,
       circular_deps,
       global_mutations,
       missing_return_types,

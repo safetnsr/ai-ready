@@ -117,6 +117,7 @@ describe('calculateRisk', () => {
   it('returns high when circular deps exist', () => {
     const risk = calculateRisk({
       file: 'test.ts',
+      incoming_deps: 0,
       circular_deps: ['other.ts'],
       global_mutations: [],
       missing_return_types: 0,
@@ -128,6 +129,7 @@ describe('calculateRisk', () => {
   it('returns medium when 1 global mutation exists', () => {
     const risk = calculateRisk({
       file: 'test.ts',
+      incoming_deps: 0,
       circular_deps: [],
       global_mutations: [{ name: 'config', line: 1 }],
       missing_return_types: 0,
@@ -139,10 +141,47 @@ describe('calculateRisk', () => {
   it('returns low for clean file', () => {
     const risk = calculateRisk({
       file: 'test.ts',
+      incoming_deps: 0,
       circular_deps: [],
       global_mutations: [],
       missing_return_types: 0,
       test_coverage: { has_test_file: true, assertion_count: 5 },
+    });
+    assert.equal(risk, 'low');
+  });
+
+  it('returns high when incoming_deps > 5 and no test file', () => {
+    const risk = calculateRisk({
+      file: 'test.ts',
+      incoming_deps: 8,
+      circular_deps: [],
+      global_mutations: [],
+      missing_return_types: 0,
+      test_coverage: { has_test_file: false, assertion_count: 0 },
+    });
+    assert.equal(risk, 'high');
+  });
+
+  it('returns medium when incoming_deps > 2 and no test file', () => {
+    const risk = calculateRisk({
+      file: 'test.ts',
+      incoming_deps: 3,
+      circular_deps: [],
+      global_mutations: [],
+      missing_return_types: 0,
+      test_coverage: { has_test_file: false, assertion_count: 0 },
+    });
+    assert.equal(risk, 'medium');
+  });
+
+  it('returns low when incoming_deps = 0 and everything clean', () => {
+    const risk = calculateRisk({
+      file: 'test.ts',
+      incoming_deps: 0,
+      circular_deps: [],
+      global_mutations: [],
+      missing_return_types: 0,
+      test_coverage: { has_test_file: true, assertion_count: 10 },
     });
     assert.equal(risk, 'low');
   });
@@ -153,6 +192,7 @@ describe('generateBriefing', () => {
     const briefing = generateBriefing({
       file: 'test.ts',
       risk_level: 'high',
+      incoming_deps: 0,
       circular_deps: ['middleware.ts'],
       global_mutations: [],
       missing_return_types: 0,
@@ -165,6 +205,7 @@ describe('generateBriefing', () => {
     const briefing = generateBriefing({
       file: 'test.ts',
       risk_level: 'medium',
+      incoming_deps: 0,
       circular_deps: [],
       global_mutations: [{ name: 'sessionStore', line: 10 }, { name: 'config', line: 5 }],
       missing_return_types: 0,
@@ -172,5 +213,57 @@ describe('generateBriefing', () => {
     });
     assert.ok(briefing.includes('sessionStore'));
     assert.ok(briefing.includes('config'));
+  });
+
+  it('includes "N files depend on this" when incoming_deps > 0', () => {
+    const briefing = generateBriefing({
+      file: 'test.ts',
+      risk_level: 'medium',
+      incoming_deps: 3,
+      circular_deps: [],
+      global_mutations: [],
+      missing_return_types: 0,
+      test_coverage: { has_test_file: true, assertion_count: 5 },
+    });
+    assert.ok(briefing.includes('3 files depend on this'));
+  });
+
+  it('includes "1 file depends on this" for single dep', () => {
+    const briefing = generateBriefing({
+      file: 'test.ts',
+      risk_level: 'low',
+      incoming_deps: 1,
+      circular_deps: [],
+      global_mutations: [],
+      missing_return_types: 0,
+      test_coverage: { has_test_file: true, assertion_count: 5 },
+    });
+    assert.ok(briefing.includes('1 file depends on this'));
+  });
+
+  it('includes "write tests before editing" for high-impact untested file', () => {
+    const briefing = generateBriefing({
+      file: 'test.ts',
+      risk_level: 'high',
+      incoming_deps: 8,
+      circular_deps: [],
+      global_mutations: [],
+      missing_return_types: 0,
+      test_coverage: { has_test_file: false, assertion_count: 0 },
+    });
+    assert.ok(briefing.includes('write tests before editing'));
+  });
+
+  it('returns safe to edit for clean file with no deps', () => {
+    const briefing = generateBriefing({
+      file: 'test.ts',
+      risk_level: 'low',
+      incoming_deps: 0,
+      circular_deps: [],
+      global_mutations: [],
+      missing_return_types: 0,
+      test_coverage: { has_test_file: true, assertion_count: 10 },
+    });
+    assert.equal(briefing, 'safe to edit.');
   });
 });

@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import { collectFiles, analyzeFiles } from './analyzer';
 import { reportTerminal, reportJSON } from './reporter';
 
-const VERSION = '0.1.0';
+const VERSION = '1.0.0';
 const HELP = `
 ai-ready — pre-session agent briefing for JS/TS codebases
 
