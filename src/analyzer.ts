@@ -151,8 +151,20 @@ export function detectMissingReturnTypes(filePath: string): number {
 }
 
 export function detectTestCoverage(filePath: string): TestCoverage {
-  const dir = path.dirname(filePath);
   const base = path.basename(filePath, path.extname(filePath));
+
+  // test files are self-covered — treat as has_test_file=true
+  if (/\.(test|spec)\.[jt]sx?$/.test(filePath) || /tests?\//.test(filePath) || base.endsWith('.test') || base.endsWith('.spec')) {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const assertions =
+      (content.match(/expect\(/g) || []).length +
+      (content.match(/assert\./g) || []).length +
+      (content.match(/\.toBe\(/g) || []).length +
+      (content.match(/\.toEqual\(/g) || []).length;
+    return { has_test_file: true, assertion_count: assertions };
+  }
+
+  const dir = path.dirname(filePath);
   const ext = path.extname(filePath);
 
   // find project root by walking up to find package.json
