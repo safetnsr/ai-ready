@@ -153,7 +153,21 @@ export function detectTestCoverage(filePath: string): TestCoverage {
   const base = path.basename(filePath, path.extname(filePath));
   const ext = path.extname(filePath);
 
+  // find project root by walking up to find package.json
+  let projectRoot = dir;
+  let search = dir;
+  for (let i = 0; i < 6; i++) {
+    if (fs.existsSync(path.join(search, 'package.json'))) {
+      projectRoot = search;
+      break;
+    }
+    const parent = path.dirname(search);
+    if (parent === search) break;
+    search = parent;
+  }
+
   const candidates = [
+    // sibling: file.test.ts next to file.ts
     path.join(dir, `${base}.test${ext}`),
     path.join(dir, `${base}.spec${ext}`),
     path.join(dir, '__tests__', `${base}${ext}`),
@@ -161,6 +175,16 @@ export function detectTestCoverage(filePath: string): TestCoverage {
     path.join(dir, `${base}.spec.ts`),
     path.join(dir, `${base}.test.js`),
     path.join(dir, `${base}.spec.js`),
+    // sibling tests/ directory at same level as src/
+    path.join(projectRoot, 'tests', `${base}.test.ts`),
+    path.join(projectRoot, 'tests', `${base}.test.js`),
+    path.join(projectRoot, 'tests', `${base}.spec.ts`),
+    path.join(projectRoot, 'test', `${base}.test.ts`),
+    path.join(projectRoot, 'test', `${base}.test.js`),
+    // also try relative from src/ → ../tests/
+    path.join(dir, '..', 'tests', `${base}.test.ts`),
+    path.join(dir, '..', 'tests', `${base}.test.js`),
+    path.join(dir, '..', 'test', `${base}.test.ts`),
   ];
 
   for (const candidate of candidates) {

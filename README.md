@@ -118,6 +118,18 @@ npx @safetnsr/ai-ready src/     # before: what to watch out for
 npx @safetnsr/vibe-check src/   # after: did anything break?
 ```
 
+## the agent workflow toolkit
+
+ai-ready pairs with [vibe-check](https://github.com/safetnsr/vibe-check) to bookend every agent coding session:
+
+```bash
+npx @safetnsr/ai-ready src/auth/   # before: know the risks
+# ... run your agent session ...
+npx @safetnsr/vibe-check           # after: catch what it broke
+```
+
+both tools are zero-install, agent-native, and designed to be called from your workflow — not just run manually.
+
 ## license
 
 MIT

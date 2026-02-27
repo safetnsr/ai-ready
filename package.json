@@ -1,6 +1,6 @@
 {
   "name": "@safetnsr/ai-ready",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "pre-session agent briefing for JS/TS codebases — know the risks before you start",
   "bin": {
     "ai-ready": "./dist/cli.js"
