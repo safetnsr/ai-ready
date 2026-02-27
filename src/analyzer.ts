@@ -1,6 +1,7 @@
 import { parse } from '@typescript-eslint/parser';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import fg from 'fast-glob';
 import madge from 'madge';
 
 export interface GlobalMutation {
@@ -33,37 +34,30 @@ export interface FileAnalysis {
 
 export interface AnalysisResult {
   files: FileAnalysis[];
+  action_items: string[];   // prioritized list of what to do before starting
   summary: string;
 }
 
-const EXCLUDED_DIRS = new Set(['node_modules', 'dist', 'build', '.git']);
-const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx']);
-
-export function collectFiles(dir: string): string[] {
-  const results: string[] = [];
-
-  function walk(current: string) {
-    const entries = fs.readdirSync(current, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        if (!EXCLUDED_DIRS.has(entry.name)) {
-          walk(path.join(current, entry.name));
-        }
-      } else if (entry.isFile()) {
-        const ext = path.extname(entry.name);
-        if (CODE_EXTENSIONS.has(ext) && !entry.name.endsWith('.d.ts')) {
-          results.push(path.join(current, entry.name));
-        }
-      }
-    }
-  }
-
+export async function collectFiles(dir: string): Promise<string[]> {
   const stat = fs.statSync(dir);
-  if (stat.isFile()) {
-    return [dir];
-  }
-  walk(dir);
-  return results;
+  if (stat.isFile()) return [dir];
+
+  const files = await fg(['**/*.{ts,tsx,js,jsx}'], {
+    cwd: dir,
+    absolute: true,
+    ignore: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/build/**',
+      '**/.git/**',
+      '**/coverage/**',
+      '**/.turbo/**',
+      '**/.next/**',
+      '**/*.d.ts',
+    ],
+  });
+
+  return files;
 }
 
 export function detectGlobalMutations(filePath: string): GlobalMutation[] {
@@ -344,6 +338,43 @@ export function generateBriefing(analysis: Omit<FileAnalysis, 'briefing'>): stri
   return parts.join(' ');
 }
 
+export function generateActionItems(analyses: FileAnalysis[]): string[] {
+  const items: string[] = [];
+
+  // 1. downstream untested — highest priority
+  for (const a of analyses) {
+    if (a.downstream_untested.length > 0 && a.incoming_deps > 0) {
+      const untested = a.downstream_untested.slice(0, 2).map(f => path.basename(f)).join(', ');
+      const more = a.downstream_untested.length > 2 ? ` +${a.downstream_untested.length - 2} more` : '';
+      items.push(`write tests for ${untested}${more} before editing ${path.basename(a.file)} (${a.incoming_deps} files depend on it)`);
+    }
+  }
+
+  // 2. circular deps — read first
+  for (const a of analyses) {
+    if (a.circular_deps.length > 0) {
+      const dep = path.basename(a.circular_deps[0]);
+      items.push(`read ${dep} before touching ${path.basename(a.file)} — circular dependency`);
+    }
+  }
+
+  // 3. global state with high incoming
+  for (const a of analyses) {
+    if (a.global_mutations.length > 0 && a.incoming_deps > 2) {
+      const names = a.global_mutations.slice(0, 2).map(m => m.name).join(', ');
+      items.push(`trace usages of ${names} in ${path.basename(a.file)} — shared by ${a.incoming_deps} files`);
+    }
+  }
+
+  // dedup and cap at 5 items
+  const seen = new Set<string>();
+  return items.filter(item => {
+    if (seen.has(item)) return false;
+    seen.add(item);
+    return true;
+  }).slice(0, 5);
+}
+
 export async function analyzeFiles(files: string[], projectRoot: string): Promise<AnalysisResult> {
   const analyses: FileAnalysis[] = [];
 
@@ -419,5 +450,6 @@ export async function analyzeFiles(files: string[], projectRoot: string): Promis
 
   clearMadgeCache();
 
-  return { files: analyses, summary };
+  const action_items = generateActionItems(analyses);
+  return { files: analyses, action_items, summary };
 }

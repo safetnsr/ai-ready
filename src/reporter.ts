@@ -86,6 +86,27 @@ function reportFile(file: FileAnalysis): string {
   return lines.join('\n');
 }
 
+export function printSummary(result: AnalysisResult): void {
+  console.log('');
+  console.log(chalk.bold('ai-ready — session prep'));
+  console.log(chalk.dim('─'.repeat(40)));
+
+  if (result.action_items.length === 0) {
+    console.log(chalk.green('✓ no action items — safe to start your session'));
+  } else {
+    console.log('');
+    console.log(chalk.bold('before you start:'));
+    result.action_items.forEach((item, i) => {
+      console.log(`  ${chalk.yellow(`${i + 1}.`)} ${item}`);
+    });
+  }
+
+  console.log('');
+  console.log(chalk.dim('─'.repeat(40)));
+  console.log(chalk.dim(result.summary));
+  console.log('');
+}
+
 export function reportTerminal(result: AnalysisResult): string {
   const lines: string[] = [];
   const separator = '─'.repeat(40);
@@ -100,6 +121,14 @@ export function reportTerminal(result: AnalysisResult): string {
     lines.push('');
   }
 
+  if (result.action_items.length > 0) {
+    lines.push('');
+    lines.push(chalk.bold('before you start:'));
+    result.action_items.forEach((item, i) => {
+      lines.push(`  ${chalk.yellow(`${i + 1}.`)} ${item}`);
+    });
+  }
+
   lines.push(separator);
   lines.push(result.summary);
   lines.push('');
@@ -108,5 +137,9 @@ export function reportTerminal(result: AnalysisResult): string {
 }
 
 export function reportJSON(result: AnalysisResult): string {
-  return JSON.stringify(result, null, 2);
+  return JSON.stringify({
+    action_items: result.action_items,
+    files: result.files,
+    summary: result.summary,
+  }, null, 2);
 }

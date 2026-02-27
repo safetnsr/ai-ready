@@ -3,9 +3,9 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { collectFiles, analyzeFiles } from './analyzer';
-import { reportTerminal, reportJSON } from './reporter';
+import { reportTerminal, reportJSON, printSummary } from './reporter';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const HELP = `
 ai-ready — pre-session agent briefing for JS/TS codebases
 
@@ -16,6 +16,7 @@ usage:
 
 options:
   --json          machine-readable output
+  --summary       show only action items and summary (no per-file details)
   --top <n>       show only top N riskiest files (default: all)
   --context       alias for default behavior (explicit flag)
   --version, -v   show version
@@ -26,6 +27,7 @@ examples:
   npx @safetnsr/ai-ready src/auth/          brief me on auth module
   npx @safetnsr/ai-ready src/auth/index.ts  brief me on one file
   npx @safetnsr/ai-ready --json             machine-readable for agent consumption
+  npx @safetnsr/ai-ready --summary          quick pre-session check
   npx @safetnsr/ai-ready --top 5            show 5 riskiest files
 `;
 
@@ -43,6 +45,7 @@ async function main() {
   }
 
   const jsonMode = args.includes('--json');
+  const summaryMode = args.includes('--summary');
   let top: number | null = null;
   const topIdx = args.indexOf('--top');
   if (topIdx !== -1 && args[topIdx + 1]) {
@@ -80,11 +83,11 @@ async function main() {
     current = path.dirname(current);
   }
 
-  const files = collectFiles(targetPath);
+  const files = await collectFiles(targetPath);
 
   if (files.length === 0) {
     if (jsonMode) {
-      console.log(JSON.stringify({ files: [], summary: 'no JS/TS files found.' }, null, 2));
+      console.log(JSON.stringify({ files: [], action_items: [], summary: 'no JS/TS files found.' }, null, 2));
     } else {
       console.log('no JS/TS files found in', targetPath);
     }
@@ -99,6 +102,18 @@ async function main() {
 
   if (effectiveTop !== null) {
     result.files = result.files.slice(0, effectiveTop);
+  }
+
+  if (summaryMode) {
+    if (jsonMode) {
+      console.log(JSON.stringify({
+        action_items: result.action_items,
+        summary: result.summary,
+      }, null, 2));
+    } else {
+      printSummary(result);
+    }
+    process.exit(result.files.some(f => f.risk_level === 'high') ? 1 : 0);
   }
 
   if (jsonMode) {

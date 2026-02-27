@@ -32,7 +32,7 @@ function run(args: string[], options?: { cwd?: string }): { stdout: string; exit
 describe('cli', () => {
   it('--version prints version and exits 0', () => {
     const { stdout, exitCode } = run(['--version']);
-    assert.ok(stdout.trim().includes('1.1.0'));
+    assert.ok(stdout.trim().includes('1.2.0'));
     assert.equal(exitCode, 0);
   });
 
@@ -40,20 +40,20 @@ describe('cli', () => {
     const { stdout, exitCode } = run(['--help']);
     assert.ok(stdout.includes('usage:'));
     assert.ok(stdout.includes('npx @safetnsr/ai-ready'));
+    assert.ok(stdout.includes('--summary'));
     assert.equal(exitCode, 0);
   });
 
   it('--json outputs valid JSON', () => {
-    // create a simple file to analyze
     fs.writeFileSync(path.join(tmpDir, 'index.ts'), 'export const x: number = 1;');
     const { stdout, exitCode } = run(['--json']);
     const parsed = JSON.parse(stdout);
     assert.ok(parsed.files);
     assert.ok(parsed.summary);
+    assert.ok(Array.isArray(parsed.action_items));
   });
 
   it('exits 1 when high-risk file found', () => {
-    // file with circular deps won't work in isolation, but >2 global mutations triggers high
     fs.writeFileSync(path.join(tmpDir, 'risky.ts'), `
 let a = 1;
 let b = 2;
@@ -66,9 +66,29 @@ export function foo() {}
 
   it('exits 0 when no high-risk files', () => {
     fs.writeFileSync(path.join(tmpDir, 'clean.ts'), `export const x: number = 1;`);
-    // add a test file to avoid medium risk from missing tests
     fs.writeFileSync(path.join(tmpDir, 'clean.test.ts'), `import {} from './clean'; expect(1).toBe(1);`);
     const { exitCode } = run(['--json']);
     assert.equal(exitCode, 0);
+  });
+
+  it('--summary gives compact output without per-file details', () => {
+    fs.writeFileSync(path.join(tmpDir, 'index.ts'), 'export const x: number = 1;');
+    fs.writeFileSync(path.join(tmpDir, 'index.test.ts'), `expect(1).toBe(1);`);
+    const { stdout } = run([tmpDir, '--summary']);
+    assert.ok(stdout.includes('session prep'));
+    // should NOT contain per-file risk badge text
+    assert.ok(!stdout.includes('[HIGH RISK]'));
+    assert.ok(!stdout.includes('[MEDIUM RISK]'));
+    assert.ok(!stdout.includes('[LOW RISK]'));
+  });
+
+  it('--summary --json gives { action_items, summary } without files', () => {
+    fs.writeFileSync(path.join(tmpDir, 'index.ts'), 'export const x: number = 1;');
+    fs.writeFileSync(path.join(tmpDir, 'index.test.ts'), `expect(1).toBe(1);`);
+    const { stdout } = run([tmpDir, '--summary', '--json']);
+    const parsed = JSON.parse(stdout);
+    assert.ok(Array.isArray(parsed.action_items));
+    assert.ok(typeof parsed.summary === 'string');
+    assert.equal(parsed.files, undefined);
   });
 });
