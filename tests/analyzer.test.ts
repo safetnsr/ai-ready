@@ -8,6 +8,7 @@ import {
   detectGlobalMutations,
   detectMissingReturnTypes,
   detectTestCoverage,
+  detectIncomingDepsDetails,
   calculateRisk,
   generateBriefing,
 } from '../src/analyzer';
@@ -113,11 +114,45 @@ describe('detectTestCoverage', () => {
   });
 });
 
+describe('detectIncomingDepsDetails', () => {
+  it('returns count and files for incoming deps', async () => {
+    // Create a mini project with two files where one imports the other
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"name":"test"}');
+    fs.writeFileSync(path.join(tmpDir, 'utils.ts'), 'export const helper = 1;');
+    fs.writeFileSync(path.join(tmpDir, 'main.ts'), 'import { helper } from "./utils";');
+
+    const result = await detectIncomingDepsDetails(path.join(tmpDir, 'utils.ts'), tmpDir);
+    assert.equal(typeof result.count, 'number');
+    assert.ok(Array.isArray(result.files));
+    assert.equal(result.count, result.files.length);
+  });
+
+  it('incoming_files contains the correct importer file name', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"name":"test"}');
+    fs.writeFileSync(path.join(tmpDir, 'lib.ts'), 'export const x = 1;');
+    fs.writeFileSync(path.join(tmpDir, 'consumer.ts'), 'import { x } from "./lib";');
+
+    const result = await detectIncomingDepsDetails(path.join(tmpDir, 'lib.ts'), tmpDir);
+    assert.ok(result.files.some(f => f.includes('consumer')));
+  });
+
+  it('returns empty when no files import the target', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"name":"test"}');
+    fs.writeFileSync(path.join(tmpDir, 'standalone.ts'), 'export const x = 1;');
+
+    const result = await detectIncomingDepsDetails(path.join(tmpDir, 'standalone.ts'), tmpDir);
+    assert.equal(result.count, 0);
+    assert.deepEqual(result.files, []);
+  });
+});
+
 describe('calculateRisk', () => {
   it('returns high when circular deps exist', () => {
     const risk = calculateRisk({
       file: 'test.ts',
       incoming_deps: 0,
+      incoming_files: [],
+      downstream_untested: [],
       circular_deps: ['other.ts'],
       global_mutations: [],
       missing_return_types: 0,
@@ -130,6 +165,8 @@ describe('calculateRisk', () => {
     const risk = calculateRisk({
       file: 'test.ts',
       incoming_deps: 0,
+      incoming_files: [],
+      downstream_untested: [],
       circular_deps: [],
       global_mutations: [{ name: 'config', line: 1 }],
       missing_return_types: 0,
@@ -142,6 +179,8 @@ describe('calculateRisk', () => {
     const risk = calculateRisk({
       file: 'test.ts',
       incoming_deps: 0,
+      incoming_files: [],
+      downstream_untested: [],
       circular_deps: [],
       global_mutations: [],
       missing_return_types: 0,
@@ -154,6 +193,8 @@ describe('calculateRisk', () => {
     const risk = calculateRisk({
       file: 'test.ts',
       incoming_deps: 8,
+      incoming_files: [],
+      downstream_untested: [],
       circular_deps: [],
       global_mutations: [],
       missing_return_types: 0,
@@ -166,6 +207,8 @@ describe('calculateRisk', () => {
     const risk = calculateRisk({
       file: 'test.ts',
       incoming_deps: 3,
+      incoming_files: [],
+      downstream_untested: [],
       circular_deps: [],
       global_mutations: [],
       missing_return_types: 0,
@@ -178,12 +221,42 @@ describe('calculateRisk', () => {
     const risk = calculateRisk({
       file: 'test.ts',
       incoming_deps: 0,
+      incoming_files: [],
+      downstream_untested: [],
       circular_deps: [],
       global_mutations: [],
       missing_return_types: 0,
       test_coverage: { has_test_file: true, assertion_count: 10 },
     });
     assert.equal(risk, 'low');
+  });
+
+  it('returns high when incoming_deps > 3 and downstream_untested > 2', () => {
+    const risk = calculateRisk({
+      file: 'test.ts',
+      incoming_deps: 4,
+      incoming_files: ['a.ts', 'b.ts', 'c.ts', 'd.ts'],
+      downstream_untested: ['a.ts', 'b.ts', 'c.ts'],
+      circular_deps: [],
+      global_mutations: [],
+      missing_return_types: 0,
+      test_coverage: { has_test_file: true, assertion_count: 10 },
+    });
+    assert.equal(risk, 'high');
+  });
+
+  it('does NOT return high when downstream_untested <= 2 even with incoming > 3', () => {
+    const risk = calculateRisk({
+      file: 'test.ts',
+      incoming_deps: 4,
+      incoming_files: ['a.ts', 'b.ts', 'c.ts', 'd.ts'],
+      downstream_untested: ['a.ts'],
+      circular_deps: [],
+      global_mutations: [],
+      missing_return_types: 0,
+      test_coverage: { has_test_file: true, assertion_count: 10 },
+    });
+    assert.notEqual(risk, 'high');
   });
 });
 
@@ -193,6 +266,8 @@ describe('generateBriefing', () => {
       file: 'test.ts',
       risk_level: 'high',
       incoming_deps: 0,
+      incoming_files: [],
+      downstream_untested: [],
       circular_deps: ['middleware.ts'],
       global_mutations: [],
       missing_return_types: 0,
@@ -206,6 +281,8 @@ describe('generateBriefing', () => {
       file: 'test.ts',
       risk_level: 'medium',
       incoming_deps: 0,
+      incoming_files: [],
+      downstream_untested: [],
       circular_deps: [],
       global_mutations: [{ name: 'sessionStore', line: 10 }, { name: 'config', line: 5 }],
       missing_return_types: 0,
@@ -215,30 +292,34 @@ describe('generateBriefing', () => {
     assert.ok(briefing.includes('config'));
   });
 
-  it('includes "N files depend on this" when incoming_deps > 0', () => {
+  it('includes "editing this affects N files" when incoming_deps > 0', () => {
     const briefing = generateBriefing({
       file: 'test.ts',
       risk_level: 'medium',
       incoming_deps: 3,
+      incoming_files: ['a.ts', 'b.ts', 'c.ts'],
+      downstream_untested: [],
       circular_deps: [],
       global_mutations: [],
       missing_return_types: 0,
       test_coverage: { has_test_file: true, assertion_count: 5 },
     });
-    assert.ok(briefing.includes('3 files depend on this'));
+    assert.ok(briefing.includes('editing this affects 3 files'));
   });
 
-  it('includes "1 file depends on this" for single dep', () => {
+  it('includes "editing this affects 1 file" for single dep', () => {
     const briefing = generateBriefing({
       file: 'test.ts',
       risk_level: 'low',
       incoming_deps: 1,
+      incoming_files: ['a.ts'],
+      downstream_untested: [],
       circular_deps: [],
       global_mutations: [],
       missing_return_types: 0,
       test_coverage: { has_test_file: true, assertion_count: 5 },
     });
-    assert.ok(briefing.includes('1 file depends on this'));
+    assert.ok(briefing.includes('editing this affects 1 file'));
   });
 
   it('includes "write tests before editing" for high-impact untested file', () => {
@@ -246,6 +327,8 @@ describe('generateBriefing', () => {
       file: 'test.ts',
       risk_level: 'high',
       incoming_deps: 8,
+      incoming_files: [],
+      downstream_untested: [],
       circular_deps: [],
       global_mutations: [],
       missing_return_types: 0,
@@ -259,11 +342,45 @@ describe('generateBriefing', () => {
       file: 'test.ts',
       risk_level: 'low',
       incoming_deps: 0,
+      incoming_files: [],
+      downstream_untested: [],
       circular_deps: [],
       global_mutations: [],
       missing_return_types: 0,
       test_coverage: { has_test_file: true, assertion_count: 10 },
     });
     assert.equal(briefing, 'safe to edit.');
+  });
+
+  it('includes "downstream without tests" when downstream_untested is non-empty', () => {
+    const briefing = generateBriefing({
+      file: 'test.ts',
+      risk_level: 'high',
+      incoming_deps: 3,
+      incoming_files: ['a.ts', 'b.ts', 'c.ts'],
+      downstream_untested: ['src/reporter.ts', 'src/cli.ts'],
+      circular_deps: [],
+      global_mutations: [],
+      missing_return_types: 0,
+      test_coverage: { has_test_file: true, assertion_count: 5 },
+    });
+    assert.ok(briefing.includes('downstream without tests:'));
+    assert.ok(briefing.includes('reporter.ts'));
+    assert.ok(briefing.includes('changes may break silently'));
+  });
+
+  it('truncates downstream_untested list at 3 with +N more', () => {
+    const briefing = generateBriefing({
+      file: 'test.ts',
+      risk_level: 'high',
+      incoming_deps: 5,
+      incoming_files: ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts'],
+      downstream_untested: ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts'],
+      circular_deps: [],
+      global_mutations: [],
+      missing_return_types: 0,
+      test_coverage: { has_test_file: true, assertion_count: 5 },
+    });
+    assert.ok(briefing.includes('+2 more'));
   });
 });

@@ -13,10 +13,17 @@ export interface TestCoverage {
   assertion_count: number;
 }
 
+export interface IncomingDepsResult {
+  count: number;
+  files: string[];  // relative paths of files that import this file
+}
+
 export interface FileAnalysis {
   file: string;
   risk_level: 'low' | 'medium' | 'high';
   incoming_deps: number;
+  incoming_files: string[];         // which files import this file
+  downstream_untested: string[];    // incoming files with no test coverage
   circular_deps: string[];
   global_mutations: GlobalMutation[];
   missing_return_types: number;
@@ -244,7 +251,7 @@ export async function detectCircularDeps(filePath: string, projectRoot: string):
   }
 }
 
-export async function detectIncomingDeps(filePath: string, projectRoot: string): Promise<number> {
+export async function detectIncomingDepsDetails(filePath: string, projectRoot: string): Promise<IncomingDepsResult> {
   try {
     let result = madgeCache.get(projectRoot);
     if (!result) {
@@ -259,19 +266,27 @@ export async function detectIncomingDeps(filePath: string, projectRoot: string):
     const relFile = path.relative(projectRoot, filePath).replace(/\\/g, '/');
     const relNoExt = relFile.replace(/\.(ts|tsx|js|jsx)$/, '');
 
-    let count = 0;
-    for (const deps of Object.values(obj)) {
+    const incomingFiles: string[] = [];
+    for (const [importer, deps] of Object.entries(obj)) {
       for (const dep of deps) {
         const depNoExt = dep.replace(/\.(ts|tsx|js|jsx)$/, '');
         if (dep === relFile || dep === relNoExt || depNoExt === relNoExt) {
-          count++;
+          incomingFiles.push(importer);
+          break;
         }
       }
     }
-    return count;
+
+    return { count: incomingFiles.length, files: incomingFiles };
   } catch {
-    return 0;
+    return { count: 0, files: [] };
   }
+}
+
+// backward compat wrapper
+export async function detectIncomingDeps(filePath: string, projectRoot: string): Promise<number> {
+  const result = await detectIncomingDepsDetails(filePath, projectRoot);
+  return result.count;
 }
 
 export function clearMadgeCache(): void {
@@ -282,6 +297,7 @@ export function calculateRisk(analysis: Omit<FileAnalysis, 'risk_level' | 'brief
   if (
     analysis.circular_deps.length > 0 ||
     (analysis.incoming_deps > 5 && !analysis.test_coverage.has_test_file) ||
+    (analysis.incoming_deps > 3 && analysis.downstream_untested.length > 2) ||
     analysis.global_mutations.length > 2 ||
     analysis.missing_return_types > 5
   ) {
@@ -302,20 +318,25 @@ export function generateBriefing(analysis: Omit<FileAnalysis, 'briefing'>): stri
   const parts: string[] = [];
 
   if (analysis.incoming_deps > 0) {
-    parts.push(`${analysis.incoming_deps} file${analysis.incoming_deps === 1 ? '' : 's'} depend${analysis.incoming_deps === 1 ? 's' : ''} on this.`);
+    parts.push(`editing this affects ${analysis.incoming_deps} file${analysis.incoming_deps === 1 ? '' : 's'}.`);
+  }
+  if (analysis.downstream_untested.length > 0) {
+    const names = analysis.downstream_untested.slice(0, 3).map(f => path.basename(f)).join(', ');
+    const more = analysis.downstream_untested.length > 3 ? ` +${analysis.downstream_untested.length - 3} more` : '';
+    parts.push(`downstream without tests: ${names}${more} — changes may break silently.`);
   }
   if (analysis.circular_deps.length > 0) {
-    parts.push(`read ${analysis.circular_deps[0]} before touching this file.`);
+    parts.push(`read ${path.basename(analysis.circular_deps[0])} before touching this file.`);
   }
   if (analysis.global_mutations.length > 0) {
     const names = analysis.global_mutations.map(m => m.name).join(', ');
     parts.push(`avoid ${names} — shared state.`);
   }
   if (analysis.missing_return_types > 0) {
-    parts.push(`${analysis.missing_return_types} functions lack return types — type errors may be unpredictable.`);
+    parts.push(`${analysis.missing_return_types} functions lack return types.`);
   }
   if (analysis.incoming_deps > 5 && analysis.test_coverage.assertion_count < 5) {
-    parts.push(`low test coverage for a high-impact file — write tests before editing.`);
+    parts.push(`write tests before editing — high impact, low coverage.`);
   }
   if (parts.length === 0) {
     return 'safe to edit.';
@@ -328,14 +349,16 @@ export async function analyzeFiles(files: string[], projectRoot: string): Promis
 
   for (const file of files) {
     const circular_deps = await detectCircularDeps(file, projectRoot);
-    const incoming_deps = await detectIncomingDeps(file, projectRoot);
+    const incomingResult = await detectIncomingDepsDetails(file, projectRoot);
     const global_mutations = detectGlobalMutations(file);
     const missing_return_types = detectMissingReturnTypes(file);
     const test_coverage = detectTestCoverage(file);
 
     const partial = {
       file: path.relative(projectRoot, file).replace(/\\/g, '/'),
-      incoming_deps,
+      incoming_deps: incomingResult.count,
+      incoming_files: incomingResult.files,
+      downstream_untested: [] as string[],  // computed in second pass
       circular_deps,
       global_mutations,
       missing_return_types,
@@ -346,6 +369,34 @@ export async function analyzeFiles(files: string[], projectRoot: string): Promis
     const briefing = generateBriefing({ ...partial, risk_level });
 
     analyses.push({ ...partial, risk_level, briefing });
+  }
+
+  // second pass: compute downstream_untested
+  for (const analysis of analyses) {
+    const downstream_untested: string[] = [];
+    for (const incomingFile of analysis.incoming_files) {
+      const absIncoming = path.resolve(projectRoot, incomingFile);
+      // check in already-analyzed files
+      const existing = analyses.find(a => a.file === incomingFile);
+      if (existing) {
+        if (!existing.test_coverage.has_test_file) {
+          downstream_untested.push(incomingFile);
+        }
+      } else {
+        // file outside target dir — detect test coverage directly
+        if (fs.existsSync(absIncoming)) {
+          const coverage = detectTestCoverage(absIncoming);
+          if (!coverage.has_test_file) {
+            downstream_untested.push(incomingFile);
+          }
+        }
+      }
+    }
+    analysis.downstream_untested = downstream_untested;
+    // recalculate risk now that downstream_untested is known
+    analysis.risk_level = calculateRisk(analysis);
+    // regenerate briefing
+    analysis.briefing = generateBriefing(analysis);
   }
 
   // sort: high first, then medium, then low

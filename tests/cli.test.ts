@@ -32,7 +32,7 @@ function run(args: string[], options?: { cwd?: string }): { stdout: string; exit
 describe('cli', () => {
   it('--version prints version and exits 0', () => {
     const { stdout, exitCode } = run(['--version']);
-    assert.ok(stdout.trim().includes('1.0.0'));
+    assert.ok(stdout.trim().includes('1.1.0'));
     assert.equal(exitCode, 0);
   });
 

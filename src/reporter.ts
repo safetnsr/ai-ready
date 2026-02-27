@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import * as path from 'node:path';
 import type { FileAnalysis, AnalysisResult } from './analyzer';
 
 function riskBadge(level: string): string {
@@ -22,14 +23,29 @@ function hint(text: string): string {
   return chalk.dim('  → ') + chalk.dim(text);
 }
 
+function formatFileList(files: string[], max: number = 3): string {
+  const basenames = files.slice(0, max).map(f => path.basename(f));
+  const more = files.length > max ? ` +${files.length - max} more` : '';
+  return basenames.join(', ') + more;
+}
+
 function reportFile(file: FileAnalysis): string {
   const lines: string[] = [];
 
   lines.push(`${file.file}  ${riskBadge(file.risk_level)}`);
 
-  // incoming deps
+  // incoming deps with file names
   if (file.incoming_deps > 0) {
-    lines.push(warn(`📥 ${file.incoming_deps} dependent${file.incoming_deps === 1 ? '' : 's'}   → ${file.incoming_deps} file${file.incoming_deps === 1 ? '' : 's'} import this`));
+    const fileList = formatFileList(file.incoming_files);
+    lines.push(warn(`📥 ${file.incoming_deps} dependent${file.incoming_deps === 1 ? '' : 's'}   → ${fileList}`));
+  }
+
+  // downstream untested
+  if (file.downstream_untested.length > 0) {
+    const names = formatFileList(file.downstream_untested);
+    lines.push(chalk.red('  🚨 untested downstream → ') + chalk.red(names + ' (no tests)'));
+  } else if (file.incoming_deps > 0) {
+    lines.push(ok('downstream safe'));
   }
 
   // circular deps
